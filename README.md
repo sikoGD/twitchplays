@@ -16,4 +16,4 @@ Twitch Plays Pokemon Bot Simplified Version [Python 3.6]
 </ul>
 <br>
 <br>
-<p>Special Thanks for: <a href="https://github.com/VPagani" target="_blank">vPagani</a> and <a href="https://www.youtube.com/channel/UCyte7e0lLMQW3s4Oox-7rQQ" target="_blank">ITConnected</a></p>
+<p>Special Thanks to: <a href="https://github.com/VPagani" target="_blank">vPagani</a> and <a href="https://www.youtube.com/channel/UCyte7e0lLMQW3s4Oox-7rQQ" target="_blank">ITConnected</a></p>
