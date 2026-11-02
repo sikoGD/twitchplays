@@ -1,123 +1,191 @@
+"""A small, local Twitch Plays controller.
+
+Run with TWITCH_TOKEN, TWITCH_BOT_USERNAME, and TWITCH_CHANNEL set in the
+environment. Commands are exact, case-insensitive chat messages such as `up`
+or `start`; normal sentences do not trigger keyboard input.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import queue
 import socket
-import pyautogui
+import ssl
+import sys
 import threading
+import time
+from dataclasses import dataclass
+from typing import Iterable
 
-SERVER = "irc.twitch.tv"
-PORT = 6667
-PASS = "authkey > https://twitchapps.com/tmi"
-BOT = "TwitchBot"
-CHANNEL = "your channel"
-OWNER = "your channel"
-message = ""
-irc = socket.socket()
-irc.connect((SERVER, PORT))
-irc.send((  "PASS " + PASS + "\n" +
-            "NICK " + BOT + "\n" +
-            "JOIN #" + CHANNEL + "\n").encode())
-
-def gamecontrol():
-    global message
-    while True:
-        if "up" in message.lower():
-            pyautogui.keyDown('w')
-            message = ""
-            pyautogui.keyUp('w')
-        elif "down" in message.lower():
-            pyautogui.keyDown('s')
-            message = ""
-            pyautogui.keyUp('s')
-        elif "left" in message.lower():
-            pyautogui.keyDown('a')
-            message = ""
-            pyautogui.keyUp('a')
-        elif "right" in message.lower():
-            pyautogui.keyDown('d')
-            message = ""
-            pyautogui.keyUp('d')
-        elif "abut" in message.lower():
-            pyautogui.keyDown('z')
-            message = ""
-            pyautogui.keyUp('z')
-        elif "bbut" in message.lower():
-            pyautogui.keyDown('x')
-            message = ""
-            pyautogui.keyUp('x')
-        elif "start" in message.lower():
-            pyautogui.keyDown('enter')
-            message = ""
-            pyautogui.keyUp('enter')
-        elif "lbut" in message.lower():
-            pyautogui.keyDown('e')
-            message = ""
-            pyautogui.keyUp('e')
-        elif "rbut" in message.lower():
-            pyautogui.keyDown('q')
-            message = ""
-            pyautogui.keyUp('q')
-        else:
-            pass
-
-def twitch():
-    def joinchat():
-        Loading = True
-        while Loading:
-            readbuffer_join = irc.recv(1024)
-            readbuffer_join = readbuffer_join.decode()
-            for line in readbuffer_join.split("\n")[0:-1]:
-                print(line)
-                Loading = loadingComplete(line)
-    def loadingComplete(line):
-        if ("End of /NAMES list" in line):
-            print("Bot has joined " + CHANNEL + "'s Channel!")
-            sendMessage(irc, "Chat Room Joined")
-            return False
-        else:
-            return True
-    def sendMessage(irc, message):
-        messageTemp = "PRIVMSG #" + CHANNEL + " :" + message
-        irc.send((messageTemp + "\n").encode())
-    def getUser(line):
-        separate = line.split(":", 2)
-        user = separate[1].split("!" , 1)[0]
-        return user
-    def getMessage(line):
-        global message
-        try:
-            message = (line.split(":",2))[2]
-        except:
-            message = ""
-        return message
-    def Console(line):
-        if "PRIVMSG" in line:
-            return False
-        else:
-            return True
-
-    joinchat()
-
-    while True:
-        try:
-            readbuffer = irc.recv(1024).decode()
-        except:
-            readbuffer = ""
-        for line in readbuffer.split("\r\n"):
-            if line == "":
-                continue
-            elif "PING" in line and Console(line):
-                msgg = "PONG tmi.twitch.tv\r\n".encode()
-                irc.send(msgg)
-                print(msgg)
-                continue
-            else:
-                print(line)
-                user = getUser(line)
-                message = getMessage(line)
-                print(user + " : " + message)
-if __name__ =='__main__':
-    t1 = threading.Thread(target = twitch)
-    t1. start()
-    t2 = threading.Thread(target = gamecontrol)
-    t2.start()
-    t2.join()
+try:
+    import pyautogui
+except Exception:  # Makes tests usable in headless environments without GUI support.
+    pyautogui = None
 
 
+HOST = "irc.chat.twitch.tv"
+PORT = 6697
+COMMANDS = {
+    "up": "w", "down": "s", "left": "a", "right": "d",
+    "a": "z", "b": "x", "start": "enter", "l": "e", "r": "q",
+}
+
+
+@dataclass(frozen=True)
+class Config:
+    token: str
+    bot_username: str
+    channel: str
+    key_hold_seconds: float = 0.08
+
+    @classmethod
+    def from_environment(cls) -> "Config":
+        required = {
+            "TWITCH_TOKEN": os.getenv("TWITCH_TOKEN", ""),
+            "TWITCH_BOT_USERNAME": os.getenv("TWITCH_BOT_USERNAME", ""),
+            "TWITCH_CHANNEL": os.getenv("TWITCH_CHANNEL", ""),
+        }
+        missing = [name for name, value in required.items() if not value.strip()]
+        if missing:
+            raise ValueError("Missing required environment variable(s): " + ", ".join(missing))
+        hold_seconds = float(os.getenv("KEY_HOLD_SECONDS", "0.08"))
+        if hold_seconds <= 0:
+            raise ValueError("KEY_HOLD_SECONDS must be greater than zero")
+        return cls(
+            token=required["TWITCH_TOKEN"].strip(),
+            bot_username=required["TWITCH_BOT_USERNAME"].strip().lower(),
+            channel=required["TWITCH_CHANNEL"].strip().lstrip("#").lower(),
+            key_hold_seconds=hold_seconds,
+        )
+
+    @property
+    def oauth_token(self) -> str:
+        return self.token if self.token.startswith("oauth:") else f"oauth:{self.token}"
+
+
+def parse_privmsg(line: str) -> tuple[str, str] | None:
+    """Return (sender, message) for a Twitch IRC PRIVMSG, otherwise None."""
+    if " PRIVMSG " not in line or " :" not in line:
+        return None
+    prefix, message = line.split(" :", 1)
+    if not prefix.startswith(":") or "!" not in prefix:
+        return None
+    return prefix[1:].split("!", 1)[0], message.strip()
+
+
+def command_from_message(message: str) -> str | None:
+    """Map an exact chat command to a configured keyboard key."""
+    return COMMANDS.get(message.strip().casefold())
+
+
+class GameController(threading.Thread):
+    def __init__(self, actions: queue.Queue[str | None], hold_seconds: float) -> None:
+        super().__init__(name="game-controller", daemon=True)
+        self.actions = actions
+        self.hold_seconds = hold_seconds
+
+    def run(self) -> None:
+        if pyautogui is None:
+            logging.error("PyAutoGUI is unavailable. Install dependencies before running the controller.")
+            return
+        while True:
+            key = self.actions.get()
+            try:
+                if key is None:
+                    return
+                pyautogui.keyDown(key)
+                time.sleep(self.hold_seconds)
+                pyautogui.keyUp(key)
+                logging.info("Pressed %s", key)
+            finally:
+                self.actions.task_done()
+
+
+class TwitchIrcClient:
+    def __init__(self, config: Config, actions: queue.Queue[str | None]) -> None:
+        self.config = config
+        self.actions = actions
+        self.socket: socket.socket | None = None
+
+    def connect(self) -> None:
+        raw_socket = socket.create_connection((HOST, PORT), timeout=15)
+        self.socket = ssl.create_default_context().wrap_socket(raw_socket, server_hostname=HOST)
+        self._send(f"PASS {self.config.oauth_token}")
+        self._send(f"NICK {self.config.bot_username}")
+        self._send("CAP REQ :twitch.tv/membership twitch.tv/tags twitch.tv/commands")
+        self._send(f"JOIN #{self.config.channel}")
+
+    def _send(self, message: str) -> None:
+        if self.socket is None:
+            raise RuntimeError("Not connected")
+        self.socket.sendall(f"{message}\r\n".encode("utf-8"))
+
+    def serve_forever(self) -> None:
+        if self.socket is None:
+            raise RuntimeError("Call connect before serve_forever")
+        buffer = ""
+        while True:
+            received = self.socket.recv(4096)
+            if not received:
+                raise ConnectionError("Twitch closed the IRC connection")
+            buffer += received.decode("utf-8", errors="replace")
+            buffer, *lines = buffer.split("\r\n")
+            for line in lines:
+                self._handle_line(line)
+
+    def _handle_line(self, line: str) -> None:
+        if line.startswith("PING"):
+            self._send("PONG :tmi.twitch.tv")
+            return
+        parsed = parse_privmsg(line)
+        if parsed is None:
+            logging.debug("IRC: %s", line)
+            return
+        sender, message = parsed
+        key = command_from_message(message)
+        if key:
+            self.actions.put(key)
+            logging.info("Queued %s from %s", message, sender)
+
+    def close(self) -> None:
+        if self.socket is not None:
+            self.socket.close()
+            self.socket = None
+
+
+def main(argv: Iterable[str] | None = None) -> int:
+    del argv
+    logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(), format="%(asctime)s %(levelname)s %(message)s")
+    try:
+        config = Config.from_environment()
+    except ValueError as error:
+        logging.error("%s", error)
+        return 2
+    if pyautogui is None:
+        logging.error("PyAutoGUI is not installed. Run: python -m pip install -r requirements.txt")
+        return 2
+
+    actions: queue.Queue[str | None] = queue.Queue()
+    controller = GameController(actions, config.key_hold_seconds)
+    client = TwitchIrcClient(config, actions)
+    controller.start()
+    try:
+        client.connect()
+        logging.info("Connected to #%s as %s", config.channel, config.bot_username)
+        client.serve_forever()
+    except (ConnectionError, OSError, ssl.SSLError) as error:
+        logging.error("Twitch connection failed: %s", error)
+        return 1
+    except KeyboardInterrupt:
+        logging.info("Stopping")
+        return 0
+    finally:
+        client.close()
+        actions.put(None)
+        controller.join(timeout=2)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
