@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.env
+
+# Local game/emulator assets and saves
+64bitvba-m/
+*.gba
+*.gb
+*.gbc
+*.sav
+*.sgm
+*.exe
+
+# Editor and operating system files
+.vscode/
+.DS_Store
+Thumbs.db
