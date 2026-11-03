@@ -28,13 +28,15 @@ It uses Twitch's TLS IRC endpoint and keeps credentials out of source control.
    $env:TWITCH_CHANNEL = "your_channel_login"
    ```
 
-3. Start the desktop controller and focus the emulator/game window:
+3. Start the desktop controller:
 
    ```powershell
    python ui.py
    ```
 
-   Enter the Twitch token, bot username, and channel in the window, then select **Start controller**. The token is kept in memory for that session. To run without the desktop window, set the environment variables above and run `python play.py`.
+   Create a setup by choosing a name and browsing to a game executable or emulator. For an emulator, you can also select a ROM. Save the setup, then use **Launch selected game**. Some emulators need command line options; enter them in **Launch arguments** and use `{game}` where the ROM path should go. If `{game}` is omitted, the ROM path is appended.
+
+   Enter the Twitch token, bot username, and channel, then select **Start Twitch controller**. The token is kept in memory for that session. Saved game setups are stored locally in `~/.twitchplays/profiles.json` and do not include Twitch credentials. To run the controller without the desktop window, set the environment variables above and run `python play.py`.
 
 ## Chat commands
 
