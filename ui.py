@@ -21,14 +21,18 @@ PANEL = "#181f2b"
 TEXT = "#edf2fa"
 MUTED = "#9aa8ba"
 ACCENT = "#a970ff"
+DEFAULT_KEYS = {
+    "up": "w", "down": "s", "left": "a", "right": "d",
+    "a": "z", "b": "x", "start": "enter", "l": "e", "r": "q",
+}
 
 
 class ControllerUI(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("Twitch Plays - Stream Setup")
-        self.geometry("760x820")
-        self.minsize(620, 700)
+        self.geometry("760x950")
+        self.minsize(620, 800)
         self.configure(bg=BG)
         self.controller_process: subprocess.Popen[str] | None = None
         self.messages: queue.Queue[str] = queue.Queue()
@@ -39,19 +43,26 @@ class ControllerUI(tk.Tk):
         self.after(100, self._poll)
         self.protocol("WM_DELETE_WINDOW", self._close)
 
-    def _load_profiles(self) -> dict[str, dict[str, str]]:
+    def _load_profiles(self) -> dict[str, dict[str, object]]:
         try:
             data = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                return {
-                    str(name): {
-                        key: str(value)
-                        for key, value in profile.items()
-                        if key in {"application", "game_file", "arguments"}
+                profiles: dict[str, dict[str, object]] = {}
+                for name, profile in data.items():
+                    if not isinstance(profile, dict):
+                        continue
+                    saved = {
+                        key: str(profile.get(key, ""))
+                        for key in ("application", "game_file", "arguments", "key_hold_seconds")
                     }
-                    for name, profile in data.items()
-                    if isinstance(profile, dict)
-                }
+                    keymap = profile.get("keymap")
+                    saved["keymap"] = {
+                        command: str(key)
+                        for command, key in keymap.items()
+                        if command in DEFAULT_KEYS and isinstance(key, str)
+                    } if isinstance(keymap, dict) else DEFAULT_KEYS.copy()
+                    profiles[str(name)] = saved
+                return profiles
         except (OSError, json.JSONDecodeError):
             pass
         return {}
@@ -118,6 +129,28 @@ class ControllerUI(tk.Tk):
         ttk.Button(game_actions, text="Launch selected game", style="Go.TButton",
                    command=self._launch_game).pack(side="right")
 
+        mapping_card = ttk.Frame(outer, style="Card.TFrame", padding=16)
+        mapping_card.pack(fill="x", pady=(12, 0))
+        self._section_title(mapping_card, "CHAT KEYBOARD CONTROLS")
+        key_grid = ttk.Frame(mapping_card, style="Card.TFrame")
+        key_grid.pack(fill="x")
+        for column in range(3):
+            key_grid.columnconfigure(column, weight=1)
+        self.key_entries: dict[str, ttk.Entry] = {}
+        for index, (command, default_key) in enumerate(DEFAULT_KEYS.items()):
+            column, row = index % 3, index // 3
+            cell = ttk.Frame(key_grid, style="Card.TFrame")
+            cell.grid(row=row, column=column, sticky="ew", padx=(0 if column == 0 else 8, 0), pady=3)
+            ttk.Label(cell, text=f"{command.upper()} key", style="Card.TLabel",
+                      foreground=MUTED, font=("Segoe UI", 8, "bold")).pack(anchor="w")
+            entry = ttk.Entry(cell)
+            entry.pack(fill="x", pady=(3, 2))
+            entry.insert(0, default_key)
+            self.key_entries[command] = entry
+        self.hold_seconds = self._field(mapping_card, "KEY HOLD (SECONDS)", "0.08")
+        ttk.Label(mapping_card, text="Set the key sent for each exact chat command. These settings are saved with each game setup.",
+                  style="Hint.TLabel", wraplength=680).pack(anchor="w")
+
         twitch_card = ttk.Frame(outer, style="Card.TFrame", padding=16)
         twitch_card.pack(fill="x", pady=(12, 0))
         self._section_title(twitch_card, "TWITCH CONNECTION")
@@ -143,7 +176,7 @@ class ControllerUI(tk.Tk):
         ttk.Label(outer, text="ACTIVITY", style="Hint.TLabel").pack(anchor="w", pady=(2, 6))
         self.log = tk.Text(outer, bg="#0b1017", fg="#c8d5e5", insertbackground=TEXT,
                            font=("Consolas", 9), relief="flat", padx=12, pady=10,
-                           wrap="word", state="disabled", height=6)
+                           wrap="word", state="disabled", height=5)
         self.log.pack(fill="both", expand=True)
         self._write("Select or create a setup. The game and Twitch controller can be started separately.")
 
@@ -219,6 +252,12 @@ class ControllerUI(tk.Tk):
         self._set_entry(self.application, profile.get("application", ""))
         self._set_entry(self.game_file, profile.get("game_file", ""))
         self._set_entry(self.arguments, profile.get("arguments", ""))
+        keymap = profile.get("keymap", DEFAULT_KEYS)
+        if not isinstance(keymap, dict):
+            keymap = DEFAULT_KEYS
+        for command, default_key in DEFAULT_KEYS.items():
+            self._set_entry(self.key_entries[command], str(keymap.get(command, default_key)))
+        self._set_entry(self.hold_seconds, str(profile.get("key_hold_seconds", "0.08")))
 
     def _new_profile(self) -> None:
         base, number = "New setup", 2
@@ -232,12 +271,27 @@ class ControllerUI(tk.Tk):
         self._set_entry(self.application, "")
         self._set_entry(self.game_file, "")
         self._set_entry(self.arguments, "")
+        for command, key in DEFAULT_KEYS.items():
+            self._set_entry(self.key_entries[command], key)
+        self._set_entry(self.hold_seconds, "0.08")
 
     def _save_profile(self) -> None:
         name = self.profile_name.get().strip()
         application = self.application.get().strip()
         if not name or not application:
             messagebox.showerror("Missing setup details", "Enter a setup name and choose a game or emulator application.")
+            return
+        try:
+            hold_seconds = float(self.hold_seconds.get().strip())
+            if hold_seconds <= 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Invalid key hold", "Key hold duration must be a number greater than zero.")
+            return
+        keymap = {command: entry.get().strip().casefold()
+                  for command, entry in self.key_entries.items()}
+        if not all(keymap.values()):
+            messagebox.showerror("Missing key binding", "Enter a keyboard key for every chat command.")
             return
         if name != self.current_profile_name and name in self.profiles:
             messagebox.showerror("Name already used", "Choose a different setup name.")
@@ -248,6 +302,8 @@ class ControllerUI(tk.Tk):
             "application": application,
             "game_file": self.game_file.get().strip(),
             "arguments": self.arguments.get().strip(),
+            "keymap": keymap,
+            "key_hold_seconds": str(hold_seconds),
         }
         self.current_profile_name = name
         try:
@@ -303,9 +359,23 @@ class ControllerUI(tk.Tk):
             return
         if self.controller_process and self.controller_process.poll() is None:
             return
+        try:
+            hold_seconds = float(self.hold_seconds.get().strip())
+            if hold_seconds <= 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Invalid key hold", "Key hold duration must be a number greater than zero.")
+            return
+        keymap = {command: entry.get().strip().casefold()
+                  for command, entry in self.key_entries.items()}
+        if not all(keymap.values()):
+            messagebox.showerror("Missing key binding", "Enter a keyboard key for every chat command.")
+            return
         env = os.environ.copy()
         env.update(TWITCH_TOKEN=values[0], TWITCH_BOT_USERNAME=values[1],
-                   TWITCH_CHANNEL=values[2].lstrip("#"))
+                   TWITCH_CHANNEL=values[2].lstrip("#"),
+                   KEY_HOLD_SECONDS=str(hold_seconds),
+                   TWITCH_COMMANDS=json.dumps(keymap))
         self.controller_process = subprocess.Popen(
             [sys.executable, str(ROOT / "play.py")], cwd=ROOT, env=env,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,

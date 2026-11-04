@@ -7,6 +7,7 @@ or `start`; normal sentences do not trigger keyboard input.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import queue
@@ -38,6 +39,7 @@ class Config:
     bot_username: str
     channel: str
     key_hold_seconds: float = 0.08
+    commands: dict[str, str] | None = None
 
     @classmethod
     def from_environment(cls) -> "Config":
@@ -52,11 +54,30 @@ class Config:
         hold_seconds = float(os.getenv("KEY_HOLD_SECONDS", "0.08"))
         if hold_seconds <= 0:
             raise ValueError("KEY_HOLD_SECONDS must be greater than zero")
+        commands = COMMANDS.copy()
+        raw_commands = os.getenv("TWITCH_COMMANDS", "")
+        if raw_commands:
+            try:
+                overrides = json.loads(raw_commands)
+            except json.JSONDecodeError as error:
+                raise ValueError("TWITCH_COMMANDS must be a JSON object") from error
+            if not isinstance(overrides, dict):
+                raise ValueError("TWITCH_COMMANDS must be a JSON object")
+            for command, key in overrides.items():
+                if command not in COMMANDS:
+                    raise ValueError(f"Unknown Twitch command: {command}")
+                if not isinstance(key, str) or not key.strip():
+                    raise ValueError(f"Keyboard key for '{command}' must be a non-empty string")
+                normalized_key = key.strip().casefold()
+                if pyautogui is not None and normalized_key not in pyautogui.KEYBOARD_KEYS:
+                    raise ValueError(f"Unsupported keyboard key for '{command}': {key}")
+                commands[command] = normalized_key
         return cls(
             token=required["TWITCH_TOKEN"].strip(),
             bot_username=required["TWITCH_BOT_USERNAME"].strip().lower(),
             channel=required["TWITCH_CHANNEL"].strip().lstrip("#").lower(),
             key_hold_seconds=hold_seconds,
+            commands=commands,
         )
 
     @property
@@ -74,9 +95,9 @@ def parse_privmsg(line: str) -> tuple[str, str] | None:
     return prefix[1:].split("!", 1)[0], message.strip()
 
 
-def command_from_message(message: str) -> str | None:
+def command_from_message(message: str, commands: dict[str, str] | None = None) -> str | None:
     """Map an exact chat command to a configured keyboard key."""
-    return COMMANDS.get(message.strip().casefold())
+    return (commands or COMMANDS).get(message.strip().casefold())
 
 
 class GameController(threading.Thread):
@@ -143,7 +164,7 @@ class TwitchIrcClient:
             logging.debug("IRC: %s", line)
             return
         sender, message = parsed
-        key = command_from_message(message)
+        key = command_from_message(message, self.config.commands)
         if key:
             self.actions.put(key)
             logging.info("Queued %s from %s", message, sender)
@@ -168,20 +189,23 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     actions: queue.Queue[str | None] = queue.Queue()
     controller = GameController(actions, config.key_hold_seconds)
-    client = TwitchIrcClient(config, actions)
     controller.start()
     try:
-        client.connect()
-        logging.info("Connected to #%s as %s", config.channel, config.bot_username)
-        client.serve_forever()
-    except (ConnectionError, OSError, ssl.SSLError) as error:
-        logging.error("Twitch connection failed: %s", error)
-        return 1
+        while True:
+            client = TwitchIrcClient(config, actions)
+            try:
+                client.connect()
+                logging.info("Connected to #%s as %s", config.channel, config.bot_username)
+                client.serve_forever()
+            except (ConnectionError, OSError, ssl.SSLError) as error:
+                logging.error("Twitch connection failed: %s", error)
+                logging.info("Reconnecting in 5 seconds")
+                client.close()
+                time.sleep(5)
     except KeyboardInterrupt:
         logging.info("Stopping")
         return 0
     finally:
-        client.close()
         actions.put(None)
         controller.join(timeout=2)
     return 0

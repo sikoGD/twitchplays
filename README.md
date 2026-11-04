@@ -38,6 +38,8 @@ It uses Twitch's TLS IRC endpoint and keeps credentials out of source control.
 
    Enter the Twitch token, bot username, and channel, then select **Start Twitch controller**. The token is kept in memory for that session. Saved game setups are stored locally in `~/.twitchplays/profiles.json` and do not include Twitch credentials. To run the controller without the desktop window, set the environment variables above and run `python play.py`.
 
+   The **Chat keyboard controls** section lets you customize the keyboard key for each exact command and adjust how long each key is held. These settings are saved per game setup. If Twitch disconnects, the controller retries the connection every five seconds.
+
 ## Chat commands
 
 | Chat message | Key pressed |
