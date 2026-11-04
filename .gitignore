@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 .venv/
 .env
+build/
+dist/
+*.spec
 
 # Local game/emulator assets and saves
 64bitvba-m/

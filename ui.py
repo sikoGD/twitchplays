@@ -376,10 +376,26 @@ class ControllerUI(tk.Tk):
                    TWITCH_CHANNEL=values[2].lstrip("#"),
                    KEY_HOLD_SECONDS=str(hold_seconds),
                    TWITCH_COMMANDS=json.dumps(keymap))
-        self.controller_process = subprocess.Popen(
-            [sys.executable, str(ROOT / "play.py")], cwd=ROOT, env=env,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
-        )
+        if getattr(sys, "frozen", False):
+            controller_exe = Path(sys.executable).with_name("TwitchPlaysController.exe")
+            if not controller_exe.is_file():
+                messagebox.showerror(
+                    "Controller file missing",
+                    "Keep TwitchPlays.exe and TwitchPlaysController.exe together in the same folder.",
+                )
+                return
+            command = [str(controller_exe)]
+        else:
+            command = [sys.executable, str(ROOT / "play.py")]
+        try:
+            self.controller_process = subprocess.Popen(
+                command, cwd=ROOT, env=env, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, bufsize=1,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except OSError as error:
+            messagebox.showerror("Could not start controller", str(error))
+            return
         process = self.controller_process
         threading.Thread(target=self._read_output, args=(process,), daemon=True).start()
         self.start_button.configure(state="disabled")

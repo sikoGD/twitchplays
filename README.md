@@ -4,9 +4,15 @@ A lightweight, local Python controller that maps exact Twitch chat messages to k
 
 It uses Twitch's TLS IRC endpoint and keeps credentials out of source control.
 
+## Windows release
+
+Download the latest `TwitchPlays-windows-x64.zip` from the repository's **Releases** page and extract it. Keep `TwitchPlays.exe` and `TwitchPlaysController.exe` together in the same folder, then launch `TwitchPlays.exe`. Python does not need to be installed.
+
+In the app, create a setup for a game or emulator, optionally choose a ROM, and launch it. Enter your Twitch bot credentials and start the controller. The token is used for that session and is not saved. Use the **Chat keyboard controls** section to customize chat-to-key bindings and key hold duration.
+
 ## Requirements
 
-- Python 3.10 or later
+- Python 3.10 or later (source version only)
 - A Twitch user access token with `chat:read` and `chat:edit` scopes
 - The game/emulator focused in the foreground while the controller runs
 
